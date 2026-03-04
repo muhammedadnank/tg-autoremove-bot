@@ -463,135 +463,127 @@ async def on_text(client: Client, msg: Message):
 
 
 # ══════════════════════════════════════════════════════
-#  AUTO DETECT  (bot added as admin to channel)
+#  CHAT MEMBER UPDATES  (bot status + member tracking)
 # ══════════════════════════════════════════════════════
 
 @app.on_chat_member_updated()
-async def on_bot_status(client: Client, update):
-    # Only handle updates about the bot itself
-    new = update.new_chat_member
+async def on_chat_member_update(client: Client, update):
+    chat    = update.chat
+    chat_id = chat.id
+    old     = update.old_chat_member
+    new     = update.new_chat_member
+
     if not new:
         return
+
+    left_statuses = {ChatMemberStatus.LEFT, ChatMemberStatus.BANNED}
+
+    # ── Bot status change (auto-detect) ─────────────
     me = await client.get_me()
-    if new.user.id != me.id:
+    if new.user.id == me.id:
+        if chat.type not in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
+            return
+
+        # Bot became admin
+        if new.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            db.add_channel(chat.id, chat.title, chat.username, DEFAULT_DAYS)
+            log.info(f"Auto-detected: {chat.title} ({chat.id})")
+
+            member_count = await get_member_count(chat.id)
+            await log_ch.log_channel_added(
+                chat.id, chat.title, chat.username,
+                DEFAULT_DAYS, member_count, method="auto"
+            )
+
+            uname     = f"@{chat.username}" if chat.username else str(chat.id)
+            count_str = f"\n👥 Members: **{member_count:,}**" if member_count else ""
+            for aid in ADMIN_IDS:
+                try:
+                    await client.send_message(
+                        aid,
+                        f"✅ **New Channel Detected!**\n\n"
+                        f"📛 **{chat.title}**\n"
+                        f"🔗 {uname}{count_str}\n"
+                        f"⏰ Default: **{DEFAULT_DAYS} days**\n\n"
+                        f"⏳ _Existing members import ചെയ്യുന്നു..._",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("⚙️ Manage",
+                                                  callback_data=f"ch_{chat.id}")]
+                        ]),
+                    )
+                except Exception as e:
+                    log.error(f"Notify admin failed: {e}")
+
+            await import_existing_members(client, chat.id)
+
+        # Bot kicked / left
+        elif new.status in left_statuses:
+            db.remove_channel(chat.id)
+            log.info(f"Bot removed from: {chat.title} ({chat.id})")
+            await log_ch.log_channel_bot_kicked(chat.id, chat.title, chat.username or "")
+            for aid in ADMIN_IDS:
+                try:
+                    await client.send_message(
+                        aid,
+                        f"⚠️ Bot removed from **{chat.title}**\n_Monitoring stopped._",
+                    )
+                except Exception:
+                    pass
         return
 
-    chat = update.chat
-    if chat.type not in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
-        return
-
-    # Bot became admin ───────────────────────────────
-    if new.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-        db.add_channel(chat.id, chat.title, chat.username, DEFAULT_DAYS)
-        log.info(f"Auto-detected: {chat.title} ({chat.id})")
-
-        member_count = await get_member_count(chat.id)
-        await log_ch.log_channel_added(
-            chat.id, chat.title, chat.username,
-            DEFAULT_DAYS, member_count, method="auto"
-        )
-
-        uname = f"@{chat.username}" if chat.username else str(chat.id)
-        count_str = f"\n👥 Members: **{member_count:,}**" if member_count else ""
-        for aid in ADMIN_IDS:
-            try:
-                await client.send_message(
-                    aid,
-                    f"✅ **New Channel Detected!**\n\n"
-                    f"📛 **{chat.title}**\n"
-                    f"🔗 {uname}{count_str}\n"
-                    f"⏰ Default: **{DEFAULT_DAYS} days**\n\n"
-                    f"⏳ _Existing members import ചെയ്യുന്നു..._",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("⚙️ Manage",
-                                              callback_data=f"ch_{chat.id}")]
-                    ]),
-                )
-            except Exception as e:
-                log.error(f"Notify admin failed: {e}")
-
-        await import_existing_members(client, chat.id)
-
-    # Bot kicked / left ──────────────────────────────
-    elif new.status in [ChatMemberStatus.LEFT, ChatMemberStatus.BANNED]:
-        db.remove_channel(chat.id)
-        log.info(f"Bot removed from: {chat.title} ({chat.id})")
-        await log_ch.log_channel_bot_kicked(chat.id, chat.title, chat.username or "")
-        for aid in ADMIN_IDS:
-            try:
-                await client.send_message(
-                    aid,
-                    f"⚠️ Bot removed from **{chat.title}**\n_Monitoring stopped._",
-                )
-            except Exception:
-                pass
-
-
-# ══════════════════════════════════════════════════════
-#  TRACK NEW MEMBERS JOINING
-# ══════════════════════════════════════════════════════
-
-@app.on_chat_member_updated()
-async def on_member_updated(client: Client, update):
-    chat_id = update.chat.id
+    # ── Regular member tracking ──────────────────────
     if not db.channel_active(chat_id):
         return
 
-    old = update.old_chat_member
-    new = update.new_chat_member
-    left_statuses = {ChatMemberStatus.LEFT, ChatMemberStatus.BANNED}
-
-    # Member joined ──────────────────────────────────
+    # Member joined
     joined = (
         (old is None or old.status in left_statuses) and
-        new is not None and
         new.status == ChatMemberStatus.MEMBER
     )
     if joined:
-        user  = new.user
-        ch    = db.get_channel(chat_id)
-        days  = ch["remove_days"] if ch else DEFAULT_DAYS
-        now   = datetime.now()
+        user      = new.user
+        ch        = db.get_channel(chat_id)
+        days      = ch["remove_days"] if ch else DEFAULT_DAYS
+        now       = datetime.now()
         remove_at = now + timedelta(days=days)
 
         db.add_member(
             user.id,
             user.username or user.first_name,
             chat_id,
-            update.chat.title or str(chat_id),
+            chat.title or str(chat_id),
             now,
             remove_at,
         )
         log.info(
             f"Tracked: {user.username or user.first_name} "
-            f"in '{update.chat.title}' → remove {remove_at.date()}"
+            f"in '{chat.title}' → remove {remove_at.date()}"
         )
 
         member_count = await get_member_count(chat_id)
         await log_ch.log_member_joined(
             user.id,
             user.username or user.first_name,
-            update.chat.title or str(chat_id),
+            chat.title or str(chat_id),
             remove_at,
             member_count,
         )
         return
 
-    # Member left on own ─────────────────────────────
+    # Member left on own
     left_own = (
         old is not None and
         old.status == ChatMemberStatus.MEMBER and
-        new is not None and
         new.status == ChatMemberStatus.LEFT
     )
     if left_own:
-        user = new.user
-        db.mark_left(user.id, chat_id)
+        user         = new.user
         member_count = await get_member_count(chat_id)
+        db.mark_left(user.id, chat_id)
         await log_ch.log_member_left(
             user.id,
             user.username or user.first_name,
-            update.chat.title or str(chat_id),
+            chat.title or str(chat_id),
             member_count,
         )
 
