@@ -679,7 +679,9 @@ async def on_chat_member_update(client: Client, update):
                         f"⏳ _Existing members import ചെയ്യുന്നു..._",
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("⚙️ Manage",
-                                                  callback_data=f"ch_{chat.id}")]
+                                                  callback_data=f"ch_{chat.id}")],
+                            [InlineKeyboardButton("➕ Another Channel Add ചെയ്യുക",
+                                                  url="https://t.me/aaaftetris_bot?startchannel=true")],
                         ]),
                     )
                 except Exception as e:
@@ -697,6 +699,10 @@ async def on_chat_member_update(client: Client, update):
                     await client.send_message(
                         aid,
                         f"⚠️ Bot removed from **{chat.title}**\n_Monitoring stopped._",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("➕ New Channel Add ചെയ്യുക",
+                                                  url="https://t.me/aaaftetris_bot?startchannel=true")],
+                        ]),
                     )
                 except Exception:
                     pass
