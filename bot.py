@@ -466,11 +466,17 @@ async def on_text(client: Client, msg: Message):
 #  AUTO DETECT  (bot added as admin to channel)
 # ══════════════════════════════════════════════════════
 
-@app.on_chat_member_updated(filters.my_chat_member)
+@app.on_chat_member_updated()
 async def on_bot_status(client: Client, update):
-    chat = update.chat
-    new  = update.new_chat_member
+    # Only handle updates about the bot itself
+    new = update.new_chat_member
+    if not new:
+        return
+    me = await client.get_me()
+    if new.user.id != me.id:
+        return
 
+    chat = update.chat
     if chat.type not in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
         return
 
