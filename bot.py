@@ -733,10 +733,8 @@ async def removal_job():
 # ══════════════════════════════════════════════════════
 
 async def startup():
-    """app.run() ആരംഭിച്ചതിനുശേഷം call ആകുന്ന startup logic"""
+    """Bot start ആയ ശേഷം ഒരിക്കൽ run ആകുന്ന init logic"""
     global _bot_id
-
-    db.init_db()
 
     me      = await app.get_me()
     _bot_id = me.id
@@ -756,10 +754,16 @@ async def startup():
         except Exception:
             pass
 
-    asyncio.create_task(removal_job())
+    await removal_job()
 
 
 if __name__ == "__main__":
-    # app.run() — kurigram's own event loop manager.
-    # asyncio.run() use ചെയ്യുന്നത് "different loop" error ഉണ്ടാക്കും.
-    app.run(startup())
+    # db.init_db() — synchronous, app.run() loop start ആകുന്നതിന് മുമ്പ്
+    # ഇവിടെ call ചെയ്യുന്നതാണ് safe (pymongo is sync, no loop dependency)
+    db.init_db()
+
+    # startup() coroutine-നെ app-ൽ register ചെയ്യുന്നു
+    # app.run() its own loop manage ചെയ്യുന്നു — "different loop" error ഇല്ല
+    loop = asyncio.get_event_loop()
+    loop.create_task(startup())
+    app.run()
