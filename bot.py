@@ -911,9 +911,23 @@ async def startup():
     while not app.is_connected:
         await asyncio.sleep(0.5)
     # Dispatcher & HandlerTasks fully ready ആകാൻ extra wait
-    await asyncio.sleep(2)
+    await asyncio.sleep(3)
 
-    me      = await app.get_me()
+    # get_me() — Render-ൽ slow connection ആകുമ്പോൾ retry ചെയ്യും
+    me = None
+    for attempt in range(1, 6):
+        try:
+            me = await app.get_me()
+            break
+        except Exception as e:
+            log.warning(f"get_me() attempt {attempt} failed: {e}. Retrying in 10s...")
+            await asyncio.sleep(10)
+
+    if me is None:
+        log.error("startup(): get_me() failed after 5 retries. Removal job still starting.")
+        await removal_job()
+        return
+
     _bot_id = me.id
     log.info(f"Bot started: @{me.username} (id={_bot_id})")
 
