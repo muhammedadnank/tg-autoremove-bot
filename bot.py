@@ -466,7 +466,7 @@ async def on_text(client: Client, msg: Message):
 #  AUTO DETECT  (bot added as admin to channel)
 # ══════════════════════════════════════════════════════
 
-@app.on_my_chat_member()
+@app.on_chat_member_updated(filters.my_chat_member)
 async def on_bot_status(client: Client, update):
     chat = update.chat
     new  = update.new_chat_member
