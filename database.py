@@ -125,7 +125,7 @@ def get_expired(now: datetime) -> list:
 
 
 def get_pending(chat_id: int = None) -> list:
-    query = {"removed": False}
+    query = {"removed": False, "left_on_own": {"$ne": True}}
     if chat_id is not None:
         query["chat_id"] = chat_id
     return list(members_col.find(query, {"_id": 0}).sort("remove_at", ASCENDING))
