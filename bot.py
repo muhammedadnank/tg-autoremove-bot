@@ -35,6 +35,9 @@ app = Client(
     bot_token=BOT_TOKEN,
 )
 
+# Cached bot user ID (set in main() after app.start())
+_bot_id: int = 0
+
 
 # ══════════════════════════════════════════════════════
 #  HELPERS
@@ -187,6 +190,7 @@ async def on_callback(client: Client, cb: CallbackQuery):
     elif d == "channels_list":
         chs = db.get_channels()
         if not chs:
+            await cb.answer()
             await cb.message.edit_text(
                 "📢 **Channels ഒന്നും ഇല്ല!**\n\n"
                 "Bot-നെ ഒരു channel-ൽ admin ആക്കൂ — auto detect ആകും.",
@@ -262,6 +266,7 @@ async def on_callback(client: Client, cb: CallbackQuery):
     elif d == "pending_all":
         pending = db.get_pending()
         if not pending:
+            await cb.answer()
             await cb.message.edit_text(
                 "✅ Pending removals ഒന്നും ഇല്ല!",
                 reply_markup=kb_back("main_menu"),
@@ -303,7 +308,10 @@ async def on_callback(client: Client, cb: CallbackQuery):
 
     # ── Days Selected ──────────────────────────────────
     elif d.startswith("days_"):
-        _, cid_s, days_s = d.split("_")
+        # Format: days_{chat_id}_{days}  — chat_id may be negative (e.g. -1001234567)
+        # Use rsplit to safely split from the right
+        _, rest     = d.split("_", 1)          # rest = "{chat_id}_{days}"
+        cid_s, days_s = rest.rsplit("_", 1)    # safe even for negative IDs
         chat_id, new_days = int(cid_s), int(days_s)
         ch       = db.get_channel(chat_id)
         old_days = ch["remove_days"]
@@ -332,6 +340,7 @@ async def on_callback(client: Client, cb: CallbackQuery):
         ch      = db.get_channel(chat_id)
         pending = db.get_pending(chat_id)
         if not pending:
+            await cb.answer()
             await cb.message.edit_text(
                 f"📢 **{ch['title']}**\n\n✅ Pending members ഒന്നും ഇല്ല.",
                 reply_markup=kb_back(f"ch_{chat_id}"),
@@ -479,8 +488,7 @@ async def on_chat_member_update(client: Client, update):
     left_statuses = {ChatMemberStatus.LEFT, ChatMemberStatus.BANNED}
 
     # ── Bot status change (auto-detect) ─────────────
-    me = await client.get_me()
-    if new.user.id == me.id:
+    if new.user.id == _bot_id:
         if chat.type not in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
             return
 
@@ -724,10 +732,15 @@ async def removal_job():
 #  MAIN
 # ══════════════════════════════════════════════════════
 
-async def main():
-    await app.start()
-    me = await app.get_me()
-    log.info(f"Bot started: @{me.username}")
+async def startup():
+    """app.run() ആരംഭിച്ചതിനുശേഷം call ആകുന്ന startup logic"""
+    global _bot_id
+
+    db.init_db()
+
+    me      = await app.get_me()
+    _bot_id = me.id
+    log.info(f"Bot started: @{me.username} (id={_bot_id})")
 
     log_ch.set_bot(app)
     await log_ch.log_bot_started(me.username)
@@ -744,8 +757,9 @@ async def main():
             pass
 
     asyncio.create_task(removal_job())
-    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # app.run() — kurigram's own event loop manager.
+    # asyncio.run() use ചെയ്യുന്നത് "different loop" error ഉണ്ടാക്കും.
+    app.run(startup())
