@@ -401,9 +401,10 @@ async def on_callback(client: Client, cb: CallbackQuery):
 
     # ── Member info ────────────────────────────────────────────────────────
     elif d.startswith("minfo_"):
-        parts   = d.split("_")
-        chat_id = int(parts[1])
-        user_id = int(parts[2])
+        _, rest  = d.split("_", 1)
+        cid_s, uid_s = rest.rsplit("_", 1)
+        chat_id = int(cid_s)
+        user_id = int(uid_s)
         rec     = db.get_member(user_id, chat_id)
         if not rec:
             await cb.answer("Member not found", show_alert=True)
@@ -440,10 +441,15 @@ async def on_callback(client: Client, cb: CallbackQuery):
 
     # ── Extend member date ─────────────────────────────────────────────────
     elif d.startswith("extdate_"):
-        parts   = d.split("_")
-        chat_id = int(parts[1])
-        user_id = int(parts[2])
-        days    = int(parts[3])
+        # Format: extdate_{chat_id}_{user_id}_{days}  — chat_id may be negative
+        _, rest       = d.split("_", 1)           # rest = "{chat_id}_{user_id}_{days}"
+        days_s        = rest.rsplit("_", 1)[1]    # days is always last
+        mid           = rest.rsplit("_", 1)[0]    # "{chat_id}_{user_id}"
+        uid_s         = mid.rsplit("_", 1)[1]
+        cid_s         = mid.rsplit("_", 1)[0]
+        chat_id = int(cid_s)
+        user_id = int(uid_s)
+        days    = int(days_s)
         rec     = db.get_member(user_id, chat_id)
         if not rec:
             await cb.answer("Member not found", show_alert=True)
@@ -698,7 +704,9 @@ async def on_chat_member_update(client: Client, update):
         new.status == ChatMemberStatus.LEFT
     )
     if left_own:
-        user         = new.user
+        user = new.user
+        if not db.member_exists(user.id, chat_id):
+            return
         member_count = await get_member_count(chat_id)
         db.mark_left(user.id, chat_id)
         await log_ch.log_member_left(
