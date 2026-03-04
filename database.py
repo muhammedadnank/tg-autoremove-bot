@@ -7,17 +7,30 @@ from datetime import datetime
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from config import MONGO_URI, DB_NAME, DEFAULT_DAYS
 
-# ── Connection ─────────────────────────────────────────────────────────────────
-client   = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-_db      = client[DB_NAME]
+# ── Connection (lazy — init_db() വിളിക്കുമ്പോൾ മാത്രം connect ചെയ്യും) ──────────
+# Python 3.14-ൽ import time-ൽ MongoClient create ചെയ്താൽ asyncio loop conflict
+# ഉണ്ടാകും. അതുകൊണ്ട് None ആയി വെക്കുന്നു, init_db()-ൽ initialize ചെയ്യും.
 
-channels_col = _db["channels"]
-members_col  = _db["members"]
-states_col   = _db["user_states"]
-settings_col = _db["settings"]
+_client      = None
+_db          = None
+
+channels_col = None
+members_col  = None
+states_col   = None
+settings_col = None
 
 
 def init_db():
+    global _client, _db, channels_col, members_col, states_col, settings_col
+
+    _client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    _db     = _client[DB_NAME]
+
+    channels_col = _db["channels"]
+    members_col  = _db["members"]
+    states_col   = _db["user_states"]
+    settings_col = _db["settings"]
+
     # Indexes
     channels_col.create_index("chat_id", unique=True)
     members_col.create_index(
@@ -139,6 +152,19 @@ def member_exists(user_id: int, chat_id: int) -> bool:
     ))
 
 
+def get_member(user_id: int, chat_id: int) -> dict | None:
+    return members_col.find_one(
+        {"user_id": user_id, "chat_id": chat_id}, {"_id": 0}
+    )
+
+
+def set_member_remove_date(user_id: int, chat_id: int, new_date: datetime):
+    members_col.update_one(
+        {"user_id": user_id, "chat_id": chat_id},
+        {"$set": {"remove_at": new_date}}
+    )
+
+
 # ══════════════════════════════════════════════════════
 #  STATS
 # ══════════════════════════════════════════════════════
@@ -178,5 +204,4 @@ def clear_state(user_id: int):
     states_col.delete_one({"user_id": user_id})
 
 
-# ── Init ───────────────────────────────────────────────────────────────────────
-init_db()
+# ── init_db() ഇവിടെ call ചെയ്യരുത്! bot.py-ലെ main()-ൽ നിന്ന് call ചെയ്യണം ──
