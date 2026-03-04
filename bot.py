@@ -138,6 +138,41 @@ def kb_cancel() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="main_menu")]])
 
 
+def kb_member_list(pending: list, chat_id: int, page: int = 0) -> InlineKeyboardMarkup:
+    """Member list with ✏️ custom date button — 10 per page"""
+    PAGE_SIZE = 10
+    start = page * PAGE_SIZE
+    chunk = pending[start:start + PAGE_SIZE]
+    rows  = []
+    for p in chunk:
+        uname = p["username"][:18]
+        rows.append([
+            InlineKeyboardButton(f"👤 {uname}", callback_data=f"minfo_{chat_id}_{p['user_id']}"),
+            InlineKeyboardButton("📅 Date", callback_data=f"setdate_{chat_id}_{p['user_id']}"),
+        ])
+    # Pagination
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"mpage_{chat_id}_{page-1}"))
+    if start + PAGE_SIZE < len(pending):
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"mpage_{chat_id}_{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("◀️ Back", callback_data=f"ch_{chat_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def kb_date_options(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    """Quick date options for a member"""
+    opts = [1, 3, 7, 14, 30]
+    rows = [[
+        InlineKeyboardButton(f"+{d}d", callback_data=f"extdate_{chat_id}_{user_id}_{d}")
+        for d in opts
+    ]]
+    rows.append([InlineKeyboardButton("◀️ Back", callback_data=f"members_{chat_id}")])
+    return InlineKeyboardMarkup(rows)
+
+
 # ══════════════════════════════════════════════════════
 #  /start
 # ══════════════════════════════════════════════════════
@@ -346,13 +381,91 @@ async def on_callback(client: Client, cb: CallbackQuery):
                 reply_markup=kb_back(f"ch_{chat_id}"),
             )
             return
-        lines = [f"👥 **{ch['title']}** — Pending ({len(pending):,})\n"]
-        for p in pending[:25]:
-            lines.append(f"• **{p['username']}**  ⏰ {time_left(p['remove_at'])}")
-        if len(pending) > 25:
-            lines.append(f"\n_...and {len(pending) - 25:,} more_")
         await cb.message.edit_text(
-            "\n".join(lines), reply_markup=kb_back(f"ch_{chat_id}")
+            f"👥 **{ch['title']}** — Pending ({len(pending):,})\n\n"
+            f"📅 _Date button → member-ന്റെ remove date മാറ്റാം_",
+            reply_markup=kb_member_list(pending, chat_id, page=0),
+        )
+
+    # ── Member list pagination ──────────────────────────────────────────────
+    elif d.startswith("mpage_"):
+        _, cid_s, page_s = d.split("_", 2)
+        chat_id, page    = int(cid_s), int(page_s)
+        ch      = db.get_channel(chat_id)
+        pending = db.get_pending(chat_id)
+        await cb.message.edit_text(
+            f"👥 **{ch['title']}** — Pending ({len(pending):,})\n\n"
+            f"📅 _Date button → member-ന്റെ remove date മാറ്റാം_",
+            reply_markup=kb_member_list(pending, chat_id, page=page),
+        )
+
+    # ── Member info ────────────────────────────────────────────────────────
+    elif d.startswith("minfo_"):
+        parts   = d.split("_")
+        chat_id = int(parts[1])
+        user_id = int(parts[2])
+        rec     = db.get_member(user_id, chat_id)
+        if not rec:
+            await cb.answer("Member not found", show_alert=True)
+            return
+        await cb.message.edit_text(
+            f"👤 **{rec['username']}**\n"
+            f"🆔 `{user_id}`\n"
+            f"📢 {rec['channel_name']}\n"
+            f"📅 Joined: **{rec['joined_at'].strftime('%d %b %Y') if rec.get('joined_at') else '—'}**\n"
+            f"⏰ Remove at: **{rec['remove_at'].strftime('%d %b %Y %H:%M') if rec.get('remove_at') else '—'}**\n"
+            f"⏳ Time left: **{time_left(rec['remove_at'])}**",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📅 Remove Date മാറ്റുക", callback_data=f"setdate_{chat_id}_{user_id}")],
+                [InlineKeyboardButton("◀️ Back", callback_data=f"members_{chat_id}")],
+            ]),
+        )
+
+    # ── Set custom date for member ─────────────────────────────────────────
+    elif d.startswith("setdate_"):
+        parts   = d.split("_")
+        chat_id = int(parts[1])
+        user_id = int(parts[2])
+        rec     = db.get_member(user_id, chat_id)
+        if not rec:
+            await cb.answer("Member not found", show_alert=True)
+            return
+        await cb.message.edit_text(
+            f"📅 **Remove Date — {rec['username']}**\n\n"
+            f"ഇപ്പോൾ: **{rec['remove_at'].strftime('%d %b %Y')}** "
+            f"({time_left(rec['remove_at'])} remaining)\n\n"
+            f"എത്ര ദിവസം _കൂടി_ add ചെയ്യണം?",
+            reply_markup=kb_date_options(chat_id, user_id),
+        )
+
+    # ── Extend member date ─────────────────────────────────────────────────
+    elif d.startswith("extdate_"):
+        parts   = d.split("_")
+        chat_id = int(parts[1])
+        user_id = int(parts[2])
+        days    = int(parts[3])
+        rec     = db.get_member(user_id, chat_id)
+        if not rec:
+            await cb.answer("Member not found", show_alert=True)
+            return
+        new_date = rec["remove_at"] + timedelta(days=days)
+        db.set_member_remove_date(user_id, chat_id, new_date)
+        await cb.answer(f"✅ +{days} days added!", show_alert=False)
+        await log_ch.log_admin_action(
+            uid, "Member Date Extended",
+            f"{rec['username']} in {rec['channel_name']}: +{days}d → {new_date.strftime('%d %b %Y')}"
+        )
+        # Refresh member info
+        rec = db.get_member(user_id, chat_id)
+        await cb.message.edit_text(
+            f"👤 **{rec['username']}**\n"
+            f"📢 {rec['channel_name']}\n"
+            f"⏰ New remove date: **{rec['remove_at'].strftime('%d %b %Y %H:%M')}**\n"
+            f"⏳ Time left: **{time_left(rec['remove_at'])}**",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📅 Date വീണ്ടും മാറ്റുക", callback_data=f"setdate_{chat_id}_{user_id}")],
+                [InlineKeyboardButton("◀️ Members List", callback_data=f"members_{chat_id}")],
+            ]),
         )
 
     # ── Delete Channel ─────────────────────────────────
@@ -739,6 +852,8 @@ async def startup():
     # app.run() fully start ആകുന്നതുവരെ wait ചെയ്യുന്നു
     while not app.is_connected:
         await asyncio.sleep(0.5)
+    # Dispatcher & HandlerTasks fully ready ആകാൻ extra wait
+    await asyncio.sleep(2)
 
     me      = await app.get_me()
     _bot_id = me.id
