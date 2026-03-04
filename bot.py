@@ -758,12 +758,28 @@ async def startup():
 
 
 if __name__ == "__main__":
-    # db.init_db() — synchronous, app.run() loop start ആകുന്നതിന് മുമ്പ്
-    # ഇവിടെ call ചെയ്യുന്നതാണ് safe (pymongo is sync, no loop dependency)
+    import os
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    # ── Dummy HTTP server — Render Web Service port scan pass ആകാൻ ───────────
+    class _PingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *args):
+            pass  # silence access logs
+
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), _PingHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log.info(f"Health-check server listening on port {port}")
+
+    # ── MongoDB init (sync, before event loop starts) ────────────────────────
     db.init_db()
 
-    # startup() coroutine-നെ app-ൽ register ചെയ്യുന്നു
-    # app.run() its own loop manage ചെയ്യുന്നു — "different loop" error ഇല്ല
+    # ── Start bot ────────────────────────────────────────────────────────────
     loop = asyncio.get_event_loop()
     loop.create_task(startup())
     app.run()
