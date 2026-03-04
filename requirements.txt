@@ -1,3 +1,4 @@
-kurigram
-pymongo
-tgcrypto
+kurigram>=2.1.0
+pymongo>=4.7.0
+tgcrypto>=1.2.5
+python-dotenv>=1.0.0
