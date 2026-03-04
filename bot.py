@@ -167,15 +167,11 @@ def kb_member_list(pending: list, chat_id: int, page: int = 0) -> InlineKeyboard
     return InlineKeyboardMarkup(rows)
 
 
-def kb_date_options(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
-    """Quick date options for a member"""
-    opts = [1, 3, 7, 14, 30]
-    rows = [[
-        InlineKeyboardButton(f"+{d}d", callback_data=f"extdate_{chat_id}_{user_id}_{d}")
-        for d in opts
-    ]]
-    rows.append([InlineKeyboardButton("◀️ Back", callback_data=f"members_{chat_id}")])
-    return InlineKeyboardMarkup(rows)
+def kb_date_input_cancel(chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    """Cancel button shown while waiting for day input"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"minfo_{chat_id}_{user_id}")]
+    ])
 
 
 # ══════════════════════════════════════════════════════
@@ -195,7 +191,9 @@ async def cmd_start(client: Client, msg: Message):
         f"📢 Channels: **{len(chs)}**\n"
         f"⏳ Pending: **{s['pending']:,}**  •  "
         f"✅ Removed: **{s['removed']:,}**\n\n"
-        f"_Channel join ചെയ്ത members-നെ X days കഴിഞ്ഞ് auto remove ചെയ്യും_ ✨",
+        f"_Channel join ചെയ്ത members-നെ X days കഴിഞ്ഞ് auto remove ചെയ്യും_ ✨\n\n"
+        f"➕ **Channel add ചെയ്യാൻ:**\n"
+        f"[ഇവിടെ click ചെയ്യൂ](https://t.me/aaaftetris_bot?startchannel=true)",
         reply_markup=kb_main(),
     )
 
@@ -436,47 +434,16 @@ async def on_callback(client: Client, cb: CallbackQuery):
         if not rec:
             await cb.answer("Member not found", show_alert=True)
             return
+        # Save state so on_text knows who we're editing
+        db.set_state(uid, "waiting_days_input", f"{chat_id}_{user_id}")
         await cb.message.edit_text(
             f"📅 **Remove Date — {rec['username']}**\n\n"
             f"ഇപ്പോൾ: **{rec['remove_at'].strftime('%d %b %Y')}** "
             f"({time_left(rec['remove_at'])} remaining)\n\n"
-            f"എത്ര ദിവസം _കൂടി_ add ചെയ്യണം?",
-            reply_markup=kb_date_options(chat_id, user_id),
-        )
-
-    # ── Extend member date ─────────────────────────────────────────────────
-    elif d.startswith("extdate_"):
-        # Format: extdate_{chat_id}_{user_id}_{days}  — chat_id may be negative
-        _, rest       = d.split("_", 1)           # rest = "{chat_id}_{user_id}_{days}"
-        days_s        = rest.rsplit("_", 1)[1]    # days is always last
-        mid           = rest.rsplit("_", 1)[0]    # "{chat_id}_{user_id}"
-        uid_s         = mid.rsplit("_", 1)[1]
-        cid_s         = mid.rsplit("_", 1)[0]
-        chat_id = int(cid_s)
-        user_id = int(uid_s)
-        days    = int(days_s)
-        rec     = db.get_member(user_id, chat_id)
-        if not rec:
-            await cb.answer("Member not found", show_alert=True)
-            return
-        new_date = rec["remove_at"] + timedelta(days=days)
-        db.set_member_remove_date(user_id, chat_id, new_date)
-        await cb.answer(f"✅ +{days} days added!", show_alert=False)
-        await log_ch.log_admin_action(
-            uid, "Member Date Extended",
-            f"{rec['username']} in {rec['channel_name']}: +{days}d → {new_date.strftime('%d %b %Y')}"
-        )
-        # Refresh member info
-        rec = db.get_member(user_id, chat_id)
-        await cb.message.edit_text(
-            f"👤 **{rec['username']}**\n"
-            f"📢 {rec['channel_name']}\n"
-            f"⏰ New remove date: **{rec['remove_at'].strftime('%d %b %Y %H:%M')}**\n"
-            f"⏳ Time left: **{time_left(rec['remove_at'])}**",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📅 Date വീണ്ടും മാറ്റുക", callback_data=f"setdate_{chat_id}_{user_id}")],
-                [InlineKeyboardButton("◀️ Members List", callback_data=f"members_{chat_id}")],
-            ]),
+            f"Days type ചെയ്ത് send ചെയ്യൂ:\n"
+            f"➕ കൂട്ടാൻ: `7`  അല്ലെങ്കിൽ `+7`\n"
+            f"➖ കുറയ്ക്കാൻ: `-5`",
+            reply_markup=kb_date_input_cancel(chat_id, user_id),
         )
 
     # ── Delete Channel ─────────────────────────────────
@@ -528,9 +495,81 @@ async def on_callback(client: Client, cb: CallbackQuery):
 async def on_text(client: Client, msg: Message):
     if not is_admin(msg.from_user.id):
         return
-    uid          = msg.from_user.id
-    state, _     = db.get_state(uid)
+    uid        = msg.from_user.id
+    state, data = db.get_state(uid)
 
+    # ── Days input for member date change ─────────────────────────────────
+    if state == "waiting_days_input":
+        text = msg.text.strip() if msg.text else ""
+        try:
+            days = int(text.lstrip("+"))  # handles "7", "+7", "-5"
+        except ValueError:
+            await msg.reply(
+                "❌ Invalid! ഒരു number send ചെയ്യൂ.\n"
+                "ഉദാ: `7` അല്ലെങ്കിൽ `-5`",
+            )
+            return
+
+        if days == 0:
+            await msg.reply("❌ 0 enter ചെയ്താൽ date മാറില്ല!")
+            return
+
+        # Parse stored state data: "{chat_id}_{user_id}"
+        cid_s, uid_s = data.rsplit("_", 1)
+        chat_id  = int(cid_s)
+        member_id = int(uid_s)
+        rec = db.get_member(member_id, chat_id)
+        if not rec:
+            db.clear_state(uid)
+            await msg.reply("❌ Member not found.")
+            return
+
+        new_date = rec["remove_at"] + timedelta(days=days)
+
+        # Safety: past date ആകരുത്
+        if new_date <= datetime.now():
+            await msg.reply(
+                f"❌ **Invalid!** {abs(days)} days കുറച്ചാൽ date past ആകും.\n\n"
+                f"ഇപ്പോൾ: **{rec['remove_at'].strftime('%d %b %Y')}**\n"
+                f"Maximum കുറയ്ക്കാവുന്നത്: "
+                f"**{(rec['remove_at'] - datetime.now()).days - 1} days**"
+            )
+            return
+
+        db.set_member_remove_date(member_id, chat_id, new_date)
+        db.clear_state(uid)
+
+        # Direction label
+        if days > 0:
+            direction = f"➕ {days} days കൂടി"
+            action    = "Member Date Extended"
+        else:
+            direction = f"➖ {abs(days)} days കുറഞ്ഞു"
+            action    = "Member Date Reduced"
+
+        await log_ch.log_admin_action(
+            uid, action,
+            f"{rec['username']} in {rec['channel_name']}: "
+            f"{'+' if days > 0 else ''}{days}d → {new_date.strftime('%d %b %Y')}"
+        )
+
+        await msg.reply(
+            f"✅ **Remove date updated!**\n\n"
+            f"👤 **{rec['username']}**\n"
+            f"📢 {rec['channel_name']}\n\n"
+            f"{direction}\n"
+            f"📅 പുതിയ date: **{new_date.strftime('%d %b %Y')}**\n"
+            f"⏳ Time left: **{time_left(new_date)}**",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📅 Date വീണ്ടും മാറ്റുക",
+                                      callback_data=f"setdate_{chat_id}_{member_id}")],
+                [InlineKeyboardButton("◀️ Members List",
+                                      callback_data=f"members_{chat_id}")],
+            ]),
+        )
+        return
+
+    # ── Channel ID input (manual add) ─────────────────────────────────────
     if state != "waiting_channel_id":
         return
 
