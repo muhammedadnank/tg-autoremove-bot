@@ -736,6 +736,10 @@ async def startup():
     """Bot start ആയ ശേഷം ഒരിക്കൽ run ആകുന്ന init logic"""
     global _bot_id
 
+    # app.run() fully start ആകുന്നതുവരെ wait ചെയ്യുന്നു
+    while not app.is_connected:
+        await asyncio.sleep(0.5)
+
     me      = await app.get_me()
     _bot_id = me.id
     log.info(f"Bot started: @{me.username} (id={_bot_id})")
