@@ -3,9 +3,14 @@ bot.py — Main Bot
 Auto-Remove Bot | Pyrogram (Kurigram) + MongoDB
 """
 
+import sys
 import asyncio
 import logging
 from datetime import datetime, timedelta
+
+# Force stdout/stderr to flush immediately (important for Render logs)
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 from pyrogram import Client, filters
 from pyrogram.types import (
@@ -889,6 +894,13 @@ if __name__ == "__main__":
     import threading
     from http.server import HTTPServer, BaseHTTPRequestHandler
 
+    # ── Validate required environment variables ──────────────────────────────
+    _missing = [v for v in ["API_ID", "API_HASH", "BOT_TOKEN", "ADMIN_IDS", "MONGO_URI"]
+                if not os.environ.get(v)]
+    if _missing:
+        print(f"❌ Missing required environment variables: {', '.join(_missing)}", flush=True)
+        sys.exit(1)
+
     # ── Dummy HTTP server — Render Web Service port scan pass ആകാൻ ───────────
     class _PingHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -904,7 +916,11 @@ if __name__ == "__main__":
     log.info(f"Health-check server listening on port {port}")
 
     # ── MongoDB init (sync, before event loop starts) ────────────────────────
-    db.init_db()
+    try:
+        db.init_db()
+    except Exception as e:
+        print(f"❌ MongoDB connection failed: {e}", flush=True)
+        sys.exit(1)
 
     # ── Start bot ────────────────────────────────────────────────────────────
     loop = asyncio.get_event_loop()
